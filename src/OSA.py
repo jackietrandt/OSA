@@ -37,7 +37,14 @@ from ctypes import windll
 ## for keylogger
 import pythoncom, pyHook, sys
 import threading
+# for tag and file storage
+import ZODB
+from ZODB.FileStorage import FileStorage
+from ZODB.DB import DB
+import random
 
+import win32api,win32con
+import Queue
 from Tkinter import Tk
 
 
@@ -48,6 +55,11 @@ from PIL import ImageGrab
 
 # 1 2 3 4 5
 
+class Node:
+    def __init__(self, param):
+        self.TagID = param
+        pass
+    
 
 class App:
     key_storage = ''
@@ -55,7 +67,38 @@ class App:
     tag_current_image = False
     tagID = 0
     def __init__(self, param):
+        self.init_database()
+        self.init_threading_variable()
         pass
+    #database to persistant keep image folder, tag ID, and possible cross link 
+    def init_database (self):
+        
+        self.storage = FileStorage('Data\Data.fs')
+        self.db = DB(self.storage)
+        self.connection = self.db.open()
+        self.root = self.connection.root()        
+        pass
+    
+    def init_threading_variable(self):
+        #hold list of executing thread
+        self.threads = []
+        self.event = threading.Event()
+        #holding queue for passing object across thread
+        self.queueLock_work = threading.Lock()
+        self.queueLock_result = threading.Lock()
+        self.queueLock_com = threading.Lock()
+        self.workQueue = Queue.Queue(20)
+        self.resultQueue = Queue.Queue(10)
+        self.comQueue = Queue.Queue(10)
+
+    def init_keyboardlog(self):
+        #setup keyboard hook to sniff keyboard key
+        self.key_storage = ''
+        self.keyboard_thread_id = win32api.GetCurrentThreadId()
+        hm = pyHook.HookManager()
+        hm.KeyDown = self.OnKeyboardEvent
+        hm.HookKeyboard()
+        pythoncom.PumpMessages()
     
     def OnKeyboardEvent(self,event):
         if chr(event.Ascii) == '#':
@@ -63,33 +106,39 @@ class App:
             self.key_storage = '#'
         else:
             self.key_storage = self.key_storage + chr(event.Ascii)
-            if self.key_storage.find('#tag'):
-                #generate unique tag ID for image copy
-                self.tag_current_clipboard = True
-            
-        print "Key: ", chr(event.Ascii)
+            if self.key_storage.find('#tag') <> -1:
+                self.key_storage = ''
+                tag = True
+                self.queueLock_work.acquire()
+                self.workQueue.put(tag)
+                self.queueLock_work.release()
+                print 'Tag detected woohoo'
+
+                
         return True
     
+    def GenerateTag(self):
+        list = self.root.keys()
+        tagID = str(random.randint(2000, 2999))
+        while filter(lambda tagID: tagID in tagID,list) <> []:
+            print filter(lambda tagID: tagID in tagID,list)
+            tagID = str(random.randint(2000, 2999))
+        return tagID
     def SaveImage(self,TagID):
         im = ImageGrab.grabclipboard()
         if im <> None:
-            im.save(str(TagID) + '.png','PNG')
+            im.save('Data\\' + str(TagID) + '.png','PNG')
             self.tag_current_image = False
             if windll.user32.OpenClipboard(None):
                 windll.user32.EmptyClipboard()
                 windll.user32.CloseClipboard()
 
-    def init_keyboardlog(self):
-        #setup keyboard hook to sniff keyboard key
-        hm = pyHook.HookManager()
-        hm.KeyDown = self.OnKeyboardEvent
-        hm.HookKeyboard()
-        pythoncom.PumpMessages()
+
         
     def addToClipBoard(self,text):
         command = 'echo ' + text.strip() + '| clip'
         os.system(command)
-
+    
     def test(self):
         pass
     def run(self):
@@ -132,20 +181,29 @@ class App:
             if string.find(result_string,'234') <> -1:
                 self.draw(1)
             
+            is_tag_keyed = False
             # 1 2 3 4 5
             # you can insert new comment with Tag
-            if self.tag_current_clipboard:
+            self.queueLock_work.acquire()
+            if not self.workQueue.empty():
+                is_tag_keyed = self.workQueue.get()
+            self.queueLock_work.release()
+
+            if is_tag_keyed:
                 #generate the next ID
                 #todo
-                self.tagID = 656565
+                self.tagID = self.GenerateTag()
+                print self.tagID
                 self.addToClipBoard(str(self.tagID))
-                self.tag_current_clipboard = False
+                
+                is_tag_keyed = False
                 self.tag_current_image = True
                 #tag this
                 #paste the tag on to the clipboad
             if self.tag_current_image:
                 self.SaveImage(self.tagID)
-                
+            #Tag 
+            #Tag  
             cv2.waitKey(20)
     def draw(self,tagID):
     #draw over lay image on top of detected tag
@@ -155,7 +213,8 @@ class App:
             fn = 'tag1.jpg'
             im_gray = cv2.imread(fn)
             cv2.imshow('Tag1', im_gray)
-            
+            #tag 2 1 0 2
+
 
 if __name__ == '__main__':
     
@@ -165,57 +224,63 @@ if __name__ == '__main__':
     
     site_packages = distutils.sysconfig.get_python_lib(plat_specific=1)
     build_no = open(os.path.join(site_packages, "pywin32.version.txt")).read().strip()
-    print ("Python version = ",sys.version)
-    print ("Opencv version = ",cv.__version__)
+    print "Python version = " + sys.version
+    print "Opencv version = " + cv.__version__
     #print("Qt version = ", QT_VERSION_STR)
-    print("Numpy version = ", np.version.version)
+    print "Numpy version = " + np.version.version
     #print ("Matplotlib version = ",matplotlib.__version__)    
-    print("PILLOW / PIL version = ",Image.VERSION)
-    print("PyWin32 version = ",build_no)
-    print("PyHook version = ",build_no)
-    
+    print "PILLOW / PIL version = " + Image.VERSION
+    print "PyWin32 version = " + build_no
+    print "PyHook version = " + build_no
+    print "ZODB3 version = 3.10.5"
+    print "Zope.interface version = 4.0.5"
+    print "zo.lockfile version 1.0.1"
     try: param = sys.argv[1]
     except: param = 0
     application = App(param)
 
-    try:
-        
-        class myThread_1 (threading.Thread):
-            def __init__(self, threadID, name, counter):
-                threading.Thread.__init__(self)
-                self.threadID = threadID
-                self.name = name
-                self.counter = counter
-            def run(self):
-                print "Starting " + self.name
-                application.run()
+  
+    
 
-        class myThread_2 (threading.Thread):
-            def __init__(self, threadID, name, counter):
-                threading.Thread.__init__(self)
-                self.threadID = threadID
-                self.name = name
-                self.counter = counter
-            def run(self):
-                print "Starting " + self.name
-                application.init_keyboardlog()
-        
-        # Create new threads
-        thread1 = myThread_1(1, "Thread-1", 1)
-        thread2 = myThread_2(2, "Thread-2", 2)
-        
-        # Start new Threads
-        thread1.start()
-        thread2.start()
-        
-        # 2 3 4 5
-        # Add threads to thread list
-        application.threads.append(thread1)
-        application.threads.append(thread2)
-        
+    #Thread for screen capture, image processing
+    class myThread_1 (threading.Thread):
+        def __init__(self, threadID, name, counter):
+            threading.Thread.__init__(self)
+            self.threadID = threadID
+            self.name = name
+            self.counter = counter
+        def run(self):
+            print "Starting " + self.name
+            application.run()
+
+
+    class myThread_2 (threading.Thread):
+        def __init__(self, threadID, name, counter):
+            threading.Thread.__init__(self)
+            self.threadID = threadID
+            self.name = name
+            self.counter = counter
+        def run(self):
+            print "Starting " + self.name
+            application.init_keyboardlog()
+            #application.test()
+
+    # Create new threads
+    thread1 = myThread_1(1, "Main Thread", 1)
+    thread2 = myThread_2(2, "Keyboard Thread", 2)
+    
+    # Start new Threads
+    thread1.start()
+    thread2.start()
+    
+    # 2 3 4 5
+    # Add threads to thread list
+    application.threads.append(thread1)
+    application.threads.append(thread2)
+    
+    #application.init_keyboardlog()
+    
         #thread.start_new_thread( application.Camera_Monitoring())
         #thread.start_new_thread( application.PathFinderMain())
         
-    except:
-        print "Error: unable to start thread"    
     #App(param).run()
